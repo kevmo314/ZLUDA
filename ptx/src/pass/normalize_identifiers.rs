@@ -127,17 +127,16 @@ fn run_statements<'input, 'b>(
             }
             ast::Statement::Variable(variable) => run_multivariable(resolver, result, variable)?,
             ast::Statement::Instruction(predicate, instruction) => {
-                result.push(Statement::Instruction((
-                    predicate
-                        .map(|pred| {
-                            Ok::<_, TranslateError>(ast::PredAt {
-                                not: pred.not,
-                                label: resolver.get(pred.label)?,
-                            })
+                let predicate = predicate
+                    .map(|pred| {
+                        Ok::<_, TranslateError>(ast::PredAt {
+                            not: pred.not,
+                            label: resolver.get(pred.label)?,
                         })
-                        .transpose()?,
-                    run_instruction(resolver, instruction)?,
-                )))
+                    })
+                    .transpose()?;
+                let instruction = run_instruction(resolver, result, instruction)?;
+                result.push(Statement::Instruction((predicate, instruction)))
             }
             ast::Statement::Block(block) => {
                 resolver.start_scope();
@@ -151,16 +150,35 @@ fn run_statements<'input, 'b>(
 
 fn run_instruction<'input, 'b>(
     resolver: &mut ScopedResolver<'input, 'b>,
+    result: &mut Vec<NormalizedStatement>,
     instruction: ast::Instruction<ast::ParsedOperand<&'input str>>,
 ) -> Result<ast::Instruction<ast::ParsedOperand<SpirvWord>>, TranslateError> {
     ast::visit_map(instruction, &mut |name: &'input str,
-                                      _: Option<(
+                                      type_space: Option<(
         &ast::Type,
         ast::StateSpace,
     )>,
-                                      _,
+                                      is_dst,
                                       _| {
-        resolver.get(&name)
+        match type_space {
+            // The sink symbol `_` in place of a destination: a fresh register nothing reads
+            Some((type_, state_space)) if name == "_" && is_dst => {
+                let ident = resolver
+                    .flat_resolver
+                    .register_unnamed(Some((type_.clone(), state_space)));
+                result.push(Statement::Variable(ast::Variable {
+                    info: ast::VariableInfo {
+                        align: None,
+                        v_type: type_.clone(),
+                        state_space,
+                        array_init: Vec::new(),
+                    },
+                    name: ident,
+                }));
+                Ok(ident)
+            }
+            _ => resolver.get(&name),
+        }
     })
 }
 
