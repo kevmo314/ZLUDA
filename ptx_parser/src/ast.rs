@@ -1071,21 +1071,36 @@ where
                 (self)(ident, type_space, is_dst, relaxed_type_check)?,
                 index,
             ),
-            ParsedOperand::VecPack(vec) => ParsedOperand::VecPack(
-                vec.into_iter()
-                    .map(|reg_or_immediate| {
-                        Ok(match reg_or_immediate {
-                            RegOrImmediate::Reg(ident) => RegOrImmediate::Reg((self)(
-                                ident,
-                                type_space,
-                                is_dst,
-                                relaxed_type_check,
-                            )?),
-                            RegOrImmediate::Imm(imm) => RegOrImmediate::Imm(imm),
+            ParsedOperand::VecPack(vec) => {
+                // Elements have the vector's scalar type or, when a .b type is split (mov), an
+                // equal share of its bits
+                let element_type = type_space.and_then(|(type_, space)| {
+                    let scalar = match type_ {
+                        Type::Vector(_, scalar) => *scalar,
+                        Type::Scalar(scalar) if scalar.kind() == ScalarKind::Bit => {
+                            ScalarType::from_size(scalar.size_of() / vec.len() as u8)?
+                        }
+                        _ => return None,
+                    };
+                    Some((Type::Scalar(scalar), space))
+                });
+                let type_space = element_type.as_ref().map(|(t, s)| (t, *s)).or(type_space);
+                ParsedOperand::VecPack(
+                    vec.into_iter()
+                        .map(|reg_or_immediate| {
+                            Ok(match reg_or_immediate {
+                                RegOrImmediate::Reg(ident) => RegOrImmediate::Reg((self)(
+                                    ident,
+                                    type_space,
+                                    is_dst,
+                                    relaxed_type_check,
+                                )?),
+                                RegOrImmediate::Imm(imm) => RegOrImmediate::Imm(imm),
+                            })
                         })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            }
         })
     }
 
