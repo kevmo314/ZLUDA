@@ -635,8 +635,15 @@ fn module_variable<'a, 'input>(
     stream: &mut PtxParser<'a, 'input>,
 ) -> PResult<(ast::LinkingDirective, ast::Variable<&'input str>)> {
     let linking = linking_directives.parse_next(stream)?;
-    let var = global_space
-        .flat_map(|space| multi_variable(linking.contains(LinkingDirective::EXTERN), space))
+    // .attribute(.managed) (managed memory) makes no difference to the device code.
+    let managed = (
+        dot_ident.verify(|s: &&str| *s == ".attribute"),
+        Token::LParen,
+        dot_ident.verify(|s: &&str| *s == ".managed"),
+        Token::RParen,
+    );
+    let var = (global_space, opt(managed))
+        .flat_map(|(space, _)| multi_variable(linking.contains(LinkingDirective::EXTERN), space))
         // TODO: support multi var in globals
         .verify_map(|multi_var| match multi_var {
             MultiVariable::Names { info, names } if names.len() == 1 => Some(ast::Variable {
@@ -4614,6 +4621,14 @@ mod tests {
         assert_eq!(module(".version 1.4\n.target sm_20, map_f64_to_f32"), Some(64));
         assert_eq!(module(".version 2.3\n.target sm_20"), Some(32));
         assert_eq!(module(".version 7.0\n.target sm_80\n.address_size 64"), Some(64));
+    }
+
+    #[test]
+    fn managed_variable() {
+        let text = ".version 7.0\n.target sm_80\n.address_size 64\n.global .attribute(.managed) .align 4 .u32 xxx = 10;\n";
+        let module = super::parse_module_checked(text).unwrap();
+        let [super::ast::Directive::Variable(_, var)] = &module.directives[..] else { panic!() };
+        assert_eq!((var.name, var.info.align, var.info.array_init.len()), ("xxx", Some(4), 1));
     }
 
     #[test]
