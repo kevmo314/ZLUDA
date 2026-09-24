@@ -128,6 +128,7 @@ macro_rules! test_ptx_warp {
 
 test_ptx!(ld_st, [1u64], [1u64]);
 test_ptx!(prefetch, [1u64], [1u64]);
+test_ptx!(ld_st_hints, [1u32, 2u32, 3u32, 4u32], [4u32, 3u32, 2u32, 1u32]);
 test_ptx!(ld_st_implicit, [0.5f32, 0.25f32], [0.5f32]);
 test_ptx!(mov, [1u64], [1u64]);
 test_ptx!(sink, [1u32, 2u32, 3u32, 4u32], [2u32, 1u32, 3u32]);
