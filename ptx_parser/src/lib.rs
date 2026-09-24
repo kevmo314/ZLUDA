@@ -515,7 +515,9 @@ fn module<'a, 'input>(stream: &mut PtxParser<'a, 'input>) -> PResult<ast::Module
                     ast::Module {
                         ptx_version: version,
                         sm_version: target,
-                        address_size: address_size.unwrap_or(32),
+                        // .address_size exists since PTX 2.3 and defaults to 32. Older PTX has no
+                        // way to say, and 64-bit hosts produced and JIT-compiled 64-bit PTX.
+                        address_size: address_size.unwrap_or(if version < (2, 3) { 64 } else { 32 }),
                         directives: directives.into_iter().flatten().collect(),
                         invalid_directives,
                     }
@@ -546,15 +548,28 @@ fn version<'a, 'input>(stream: &mut PtxParser<'a, 'input>) -> PResult<(u8, u8)> 
         .parse_next(stream)
 }
 
+// .target sm_xx{, option}: the options (debug, texture modes and the obsolete map_f64_to_f32)
+// do not change the translation.
 fn target<'a, 'input>(stream: &mut PtxParser<'a, 'input>) -> PResult<(u32, Option<char>)> {
     preceded(
         Token::DotTarget,
         (
             ident.and_then(shader_model),
-            opt((Token::Comma, ident_literal("debug"))),
+            repeat::<_, _, (), _, _>(
+                0..,
+                (
+                    Token::Comma,
+                    alt((
+                        ident_literal("debug"),
+                        ident_literal("map_f64_to_f32"),
+                        ident_literal("texmode_unified"),
+                        ident_literal("texmode_independent"),
+                    )),
+                ),
+            ),
         ),
     )
-    .map(|((target, arch_variant), _debug)| (target, arch_variant))
+    .map(|((target, arch_variant), ())| (target, arch_variant))
     .parse_next(stream)
 }
 
@@ -4572,6 +4587,33 @@ mod tests {
         };
         assert!(target.parse(stream).is_err());
         assert_eq!(errors.len(), 0);
+    }
+
+    #[test]
+    fn target_options() {
+        for text in [".target sm_20, map_f64_to_f32", ".target sm_20, texmode_independent, debug"] {
+            let tokens = Token::lexer(text)
+                .map(|t| t.map(|t| (t, Span::default())))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let mut errors = Vec::new();
+            let stream = super::PtxParser {
+                input: &tokens[..],
+                state: PtxParserState::new(text, &mut errors),
+            };
+            assert_eq!(target.parse(stream).unwrap(), (20, None), "{text}");
+        }
+    }
+
+    #[test]
+    fn address_size_default() {
+        let module = |header: &str| {
+            let text = format!("{header}\n.entry k(.param .u64 p)\n{{\n\tret;\n}}\n");
+            super::parse_module_checked(&text).map(|m| m.address_size).ok()
+        };
+        assert_eq!(module(".version 1.4\n.target sm_20, map_f64_to_f32"), Some(64));
+        assert_eq!(module(".version 2.3\n.target sm_20"), Some(32));
+        assert_eq!(module(".version 7.0\n.target sm_80\n.address_size 64"), Some(64));
     }
 
     #[test]
