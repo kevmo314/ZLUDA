@@ -305,6 +305,7 @@ test_ptx!(
 );
 test_ptx_with_32!(shared_variable, [513u64], [513u64]);
 test_ptx!(shared_ptr_32, [513u64], [513u64]);
+test_ptx!(shared_cta, [5u64], [11u64]);
 test_ptx!(atom_cas, [91u32, 91u32], [91u32, 100u32]);
 test_ptx!(atom_inc, [100u32], [100u32, 101u32, 0u32]);
 test_ptx_with_32!(atom_add, [2u32, 4u32], [2u32, 6u32]);
