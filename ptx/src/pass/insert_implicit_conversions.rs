@@ -202,6 +202,11 @@ fn default_implicit_conversion_space(
     instruction_space: ast::StateSpace,
     is_32bit: bool,
 ) -> Result<Option<ConversionKind>, TranslateError> {
+    if instruction_space == ast::StateSpace::SharedCluster {
+        return Err(error_todo_msg(
+            ".shared::cluster (distributed shared memory) is not supported",
+        ));
+    }
     if (instruction_space == ast::StateSpace::Generic && coerces_to_generic(operand_space))
         || (operand_space == ast::StateSpace::Generic && coerces_to_generic(instruction_space))
     {
