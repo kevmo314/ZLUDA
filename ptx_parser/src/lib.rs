@@ -418,11 +418,20 @@ fn lex_with_span_unchecked<'input>(
     let mut errors = Vec::new();
     for (token, span) in lexer.spanned() {
         match token {
-            Ok(t) => result.push((t, span)),
+            Ok(t) => result.push((normalize_token(t), span)),
             Err(err) => errors.push(PtxError::Lexer { source: err }),
         }
     }
     (result, errors)
+}
+
+// .shared::cta is .shared (the executing CTA's shared memory, as opposed to .shared::cluster), so
+// lex it as .shared: every instruction that accepts .shared then accepts .shared::cta too.
+fn normalize_token(token: Token<'_>) -> Token<'_> {
+    match token {
+        Token::DotSharedCta => Token::DotShared,
+        token => token,
+    }
 }
 
 pub fn parse_module_checked<'input>(
@@ -437,7 +446,7 @@ pub fn parse_module_checked<'input>(
             None => break,
         };
         match maybe_token {
-            Ok(token) => tokens.push((token, lexer.span())),
+            Ok(token) => tokens.push((normalize_token(token), lexer.span())),
             Err(mut err) => {
                 err.0 = lexer.span();
                 errors.push(PtxError::from(err))
@@ -477,7 +486,7 @@ pub fn parse_module_unchecked<'input>(text: &'input str) -> ast::Module<'input> 
             None => break,
         };
         match maybe_token {
-            Ok(token) => tokens.push((token, lexer.span())),
+            Ok(token) => tokens.push((normalize_token(token), lexer.span())),
             Err(mut err) => {
                 err.0 = lexer.span();
                 errors.push(PtxError::from(err))
@@ -4572,6 +4581,48 @@ mod tests {
         };
         assert!(target.parse(stream).is_err());
         assert_eq!(errors.len(), 0);
+    }
+
+    #[test]
+    fn shared_cta_is_shared() {
+        let text = "
+            .version 7.8
+            .target sm_80
+            .address_size 64
+            .visible .entry k(.param .u64 p)
+            {
+                .shared .align 8 .b8 s[16];
+                .reg .u64 a;
+                .reg .u32 b;
+                ld.param.u64 a, [p];
+                st.shared::cta.u64 [s], a;
+                ld.shared::cta.u64 a, [s];
+                atom.shared::cta.add.u32 b, [s], 1;
+                cp.async.ca.shared::cta.global [s+8], [a], 8;
+                ret;
+            }";
+        let module = super::parse_module_checked(text).unwrap();
+        let [super::ast::Directive::Method(_, method)] = &module.directives[..] else {
+            panic!()
+        };
+        let spaces = method
+            .body
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter_map(|statement| match statement {
+                super::ast::Statement::Instruction(_, instruction) => match instruction {
+                    super::ast::Instruction::St { data, .. } => Some(data.state_space),
+                    super::ast::Instruction::Ld { data, .. } => Some(data.state_space),
+                    super::ast::Instruction::Atom { data, .. } => Some(data.space),
+                    super::ast::Instruction::CpAsync { data, .. } => Some(data.space),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .map(|space| space.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(spaces, [".param", ".shared", ".shared", ".shared", ".shared"]);
     }
 
     #[test]
