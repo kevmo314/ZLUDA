@@ -1,0 +1,92 @@
+// Every f16 subnormal is a normal f32, so cvt.f32.f16 must preserve it even
+// when it executes in a kernel whose f32 arithmetic flushes denormals.
+// Checks all f16 subnormals of both signs against a reference built from
+// integers (m * 2^-24, which never produces an f32 denormal), both as a plain
+// conversion and as an operand of an f32 ftz fma (which the backend may fuse
+// into a mixed-precision instruction).
+// Output: [plain conversion mismatches, fused conversion mismatches]
+.version 7.0
+.target sm_53
+.address_size 64
+
+.visible .entry cvt_f32_f16_ftz(
+	.param .u64 input,
+	.param .u64 output
+)
+{
+	.reg .u64 	    in_addr;
+	.reg .u64 	    out_addr;
+	.reg .u32 	    m;
+	.reg .s32 	    m_neg;
+	.reg .u32 	    plain_errors;
+	.reg .u32 	    fused_errors;
+	.reg .b16 	    h_bits;
+	.reg .f16 	    h;
+	.reg .f32 	    scale;
+	.reg .f32 	    addend;
+	.reg .f32 	    value;
+	.reg .f32 	    expected;
+	.reg .b32 	    value_bits;
+	.reg .b32 	    expected_bits;
+	.reg .pred 	    mismatch;
+	.reg .pred 	    more;
+
+	ld.param.u64 	in_addr, [input];
+	ld.param.u64 	out_addr, [output];
+
+	ld.f32          scale, [in_addr];
+	ld.f32          addend, [in_addr+4];
+	mov.u32         plain_errors, 0;
+	mov.u32         fused_errors, 0;
+	mov.u32         m, 1;
+
+loop_body:
+	// positive subnormal: m * 2^-24
+	cvt.u16.u32     h_bits, m;
+	mov.b16         h, h_bits;
+	cvt.rn.f32.u32  expected, m;
+	mul.ftz.f32     expected, expected, 0f33800000;
+
+	cvt.f32.f16     value, h;
+	mov.b32         value_bits, value;
+	mov.b32         expected_bits, expected;
+	setp.ne.b32     mismatch, value_bits, expected_bits;
+	@mismatch add.u32 plain_errors, plain_errors, 1;
+
+	cvt.f32.f16     value, h;
+	fma.rn.ftz.f32  value, value, scale, addend;
+	fma.rn.ftz.f32  expected, expected, scale, addend;
+	mov.b32         value_bits, value;
+	mov.b32         expected_bits, expected;
+	setp.ne.b32     mismatch, value_bits, expected_bits;
+	@mismatch add.u32 fused_errors, fused_errors, 1;
+
+	// negative subnormal: -m * 2^-24
+	or.b16          h_bits, h_bits, 0x8000;
+	mov.b16         h, h_bits;
+	neg.s32         m_neg, m;
+	cvt.rn.f32.s32  expected, m_neg;
+	mul.ftz.f32     expected, expected, 0f33800000;
+
+	cvt.f32.f16     value, h;
+	mov.b32         value_bits, value;
+	mov.b32         expected_bits, expected;
+	setp.ne.b32     mismatch, value_bits, expected_bits;
+	@mismatch add.u32 plain_errors, plain_errors, 1;
+
+	cvt.f32.f16     value, h;
+	fma.rn.ftz.f32  value, value, scale, addend;
+	fma.rn.ftz.f32  expected, expected, scale, addend;
+	mov.b32         value_bits, value;
+	mov.b32         expected_bits, expected;
+	setp.ne.b32     mismatch, value_bits, expected_bits;
+	@mismatch add.u32 fused_errors, fused_errors, 1;
+
+	add.u32         m, m, 1;
+	setp.lt.u32     more, m, 1024;
+	@more bra       loop_body;
+
+	st.u32          [out_addr], plain_errors;
+	st.u32          [out_addr+4], fused_errors;
+	ret;
+}

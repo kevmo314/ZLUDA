@@ -501,6 +501,8 @@ test_ptx!(param_is_addressable, [0xDEAD], [0u64]);
 //);
 test_ptx!(copysign, [0x0BDA2A2Cu32, 0xe31a8fd7u32], [0x631A8FD7u32]);
 test_ptx!(cvt_f16x2_f32, [1.0f32, 2.0f32], [0x3C004000u32]);
+// Inputs are the fma scale and addend, outputs are mismatch counts
+test_ptx!(cvt_f32_f16_ftz, [1024.0f32, 1.0f32], [0u32, 0u32]);
 test_ptx!(
     cvt_relu_f16x2_f32,
     // Not testing for NaN because AMDG GPUs returns a different NaN
